@@ -4,12 +4,27 @@ set -e  # if a command fails it stops the execution
 set -u  # script fails if trying to access to an undefined variable
 
 echo "[+] Action start"
-SOURCE_FOLDER="${1}"
-DESTINATION_REPO="${2}"
-GITHUB_SERVER="${3}"
-DESTINATION_HEAD_BRANCH="${4}"
-USER_EMAIL="${5}"
-USER_NAME="${6}"
+SOURCE_BEFORE_DIRECTORY="${1}"
+SOURCE_DIRECTORY="${2}"
+DESTINATION_GITHUB_USERNAME="${3}"
+DESTINATION_REPOSITORY_NAME="${4}"
+GITHUB_SERVER="${5}"
+USER_EMAIL="${6}"
+USER_NAME="${7}"
+DESTINATION_REPOSITORY_USERNAME="${8}"
+TARGET_BRANCH="${9}"
+COMMIT_MESSAGE="${10}"
+TARGET_DIRECTORY="${11}"
+
+if [ -z "$DESTINATION_REPOSITORY_USERNAME" ]
+then
+	DESTINATION_REPOSITORY_USERNAME="$DESTINATION_GITHUB_USERNAME"
+fi
+
+if [ -z "$USER_NAME" ]
+then
+	USER_NAME="$DESTINATION_GITHUB_USERNAME"
+fi
 
 # Verify that there (potentially) some access to the destination repository
 # and set up git (with GIT_CMD variable) and GIT_CMD_REPOSITORY
@@ -28,12 +43,12 @@ then
 
 	export GIT_SSH_COMMAND="ssh -i "$DEPLOY_KEY_FILE" -o UserKnownHostsFile=$SSH_KNOWN_HOSTS_FILE"
 
-	GIT_CMD_REPOSITORY="git@$GITHUB_SERVER:$DESTINATION_REPO.git"
+	GIT_CMD_REPOSITORY="git@$GITHUB_SERVER:$DESTINATION_REPOSITORY_USERNAME/$DESTINATION_REPOSITORY_NAME.git"
 
 elif [ -n "${API_TOKEN_GITHUB:=}" ]
 then
 	echo "[+] Using API_TOKEN_GITHUB"
-	GIT_CMD_REPOSITORY="https://$DESTINATION_REPOSITORY_USERNAME:$API_TOKEN_GITHUB@$GITHUB_SERVER/$DESTINATION_REPO.git"
+	GIT_CMD_REPOSITORY="https://$DESTINATION_REPOSITORY_USERNAME:$API_TOKEN_GITHUB@$GITHUB_SERVER/$DESTINATION_REPOSITORY_USERNAME/$DESTINATION_REPOSITORY_NAME.git"
 else
 	echo "::error::API_TOKEN_GITHUB and SSH_DEPLOY_KEY are empty. Please fill one (recommended the SSH_DEPLOY_KEY)"
 	exit 1
@@ -45,12 +60,21 @@ CLONE_DIR=$(mktemp -d)
 echo "[+] Git version"
 git --version
 
-echo "[+] Cloning destination git repository $DESTINATION_REPO"
+echo "[+] Cloning destination git repository $DESTINATION_REPOSITORY_NAME"
 # Setup git
 git config --global user.email "$USER_EMAIL"
 git config --global user.name "$USER_NAME"
 
+{
+	git clone --single-branch --branch "$TARGET_BRANCH" "$GIT_CMD_REPOSITORY" "$CLONE_DIR"
+} || {
+	echo "::error::Could not clone the destination repository. Command:"
+	echo "::error::git clone --single-branch --branch $TARGET_BRANCH $GIT_CMD_REPOSITORY $CLONE_DIR"
+	echo "::error::(Note that if they exist USER_NAME and API_TOKEN is redacted by GitHub)"
+	echo "::error::Please verify that the target repository exist AND that it contains the destination branch name, and is accesible by the API_TOKEN_GITHUB OR SSH_DEPLOY_KEY"
+	exit 1
 
+}
 ls -la "$CLONE_DIR"
 
 TEMP_DIR=$(mktemp -d)
@@ -59,7 +83,8 @@ TEMP_DIR=$(mktemp -d)
 # including "." and with the exception of ".git/"
 mv "$CLONE_DIR/.git" "$TEMP_DIR/.git"
 
-
+# $TARGET_DIRECTORY is '' by default
+ABSOLUTE_TARGET_DIRECTORY="$CLONE_DIR/$TARGET_DIRECTORY/"
 
 echo "[+] Deleting $ABSOLUTE_TARGET_DIRECTORY"
 rm -rf "$ABSOLUTE_TARGET_DIRECTORY"
@@ -75,13 +100,13 @@ ls -al /
 
 mv "$TEMP_DIR/.git" "$CLONE_DIR/.git"
 
-echo "[+] List contents of $SOURCE_FOLDER"
-ls "$SOURCE_FOLDER"
+echo "[+] List contents of $SOURCE_DIRECTORY"
+ls "$SOURCE_DIRECTORY"
 
-echo "[+] Checking if local $SOURCE_FOLDER exist"
-if [ ! -d "$SOURCE_FOLDER" ]
+echo "[+] Checking if local $SOURCE_DIRECTORY exist"
+if [ ! -d "$SOURCE_DIRECTORY" ]
 then
-	echo "ERROR: $SOURCE_FOLDER does not exist"
+	echo "ERROR: $SOURCE_DIRECTORY does not exist"
 	echo "This directory needs to exist when push-to-another-repository is executed"
 	echo
 	echo "In the example it is created by ./build.sh: https://github.com/cpina/push-to-another-repository-example/blob/main/.github/workflows/ci.yml#L19"
@@ -93,16 +118,16 @@ then
 	exit 1
 fi
 
-echo "[+] Copying contents of source repository folder $SOURCE_FOLDER to folder $TARGET_DIRECTORY in git repo $DESTINATION_REPO"
-cp -ra "$SOURCE_FOLDER"/. "$CLONE_DIR/$TARGET_DIRECTORY"
+echo "[+] Copying contents of source repository folder $SOURCE_DIRECTORY to folder $TARGET_DIRECTORY in git repo $DESTINATION_REPOSITORY_NAME"
+cp -ra "$SOURCE_DIRECTORY"/. "$CLONE_DIR/$TARGET_DIRECTORY"
 cd "$CLONE_DIR"
 
 echo "[+] Files that will be pushed"
 ls -la
 
 ORIGIN_COMMIT="https://$GITHUB_SERVER/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
-
-
+COMMIT_MESSAGE="${COMMIT_MESSAGE/ORIGIN_COMMIT/$ORIGIN_COMMIT}"
+COMMIT_MESSAGE="${COMMIT_MESSAGE/\$GITHUB_REF/$GITHUB_REF}"
 
 echo "[+] Set directory is safe ($CLONE_DIR)"
 # Related to https://github.com/cpina/github-action-push-to-another-repository/issues/64 and https://github.com/cpina/github-action-push-to-another-repository/issues/64
@@ -111,17 +136,17 @@ git config --global --add safe.directory "$CLONE_DIR"
 
 echo "[+] Adding git commit"
 git add .
-if git status | grep -q "Changes to be committed"
-then
-  git commit --message "Update from https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
-  echo "Pushing git commit"
-  git push -u origin HEAD:$INPUT_DESTINATION_HEAD_BRANCH
-  echo "Creating a pull request"
-  gh pr create -t $INPUT_DESTINATION_HEAD_BRANCH \
-               -b $INPUT_DESTINATION_HEAD_BRANCH \
-               -B $INPUT_DESTINATION_BASE_BRANCH \
-               -H $INPUT_DESTINATION_HEAD_BRANCH \
-                  $PULL_REQUEST_REVIEWERS
-else
-  echo "No changes detected"
-fi
+
+echo "[+] git status:"
+git status
+
+echo "[+] git diff-index:"
+# git diff-index : to avoid doing the git commit failing if there are no changes to be commit
+git diff-index --quiet HEAD || git commit --message "$COMMIT_MESSAGE"
+
+echo "Creating a pull request"
+gh pr create -t $INPUT_DESTINATION_HEAD_BRANCH \
+              -b $INPUT_DESTINATION_HEAD_BRANCH \
+              -B $INPUT_DESTINATION_BASE_BRANCH \
+              -H $INPUT_DESTINATION_HEAD_BRANCH \
+                $PULL_REQUEST_REVIEWERS
