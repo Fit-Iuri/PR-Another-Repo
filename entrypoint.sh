@@ -1,44 +1,135 @@
-#!/bin/sh
+#!/bin/sh -l
 
-set -e
-set -x
+set -e  # if a command fails it stops the execution
+set -u  # script fails if trying to access to an undefined variable
 
-if [ -z "$INPUT_SOURCE_FOLDER" ]
+echo "[+] Action start"
+SOURCE_FOLDER="${1}"
+DESTINATION_REPO="${2}"
+GITHUB_SERVER="${3}"
+DESTINATION_HEAD_BRANCH="${4}"
+USER_EMAIL="${5}"
+USER_NAME="${6}"
+TARGET_BRANCH="${7}"
+COMMIT_MESSAGE="${8}"
+TARGET_DIRECTORY="${9}"
+
+
+
+if [ -z "$USER_NAME" ]
 then
-  echo "Source folder must be defined"
-  return -1
+	USER_NAME="$DESTINATION_GITHUB_USERNAME"
 fi
 
-if [ $INPUT_DESTINATION_HEAD_BRANCH == "main" ] || [ $INPUT_DESTINATION_HEAD_BRANCH == "master" ]
+# Verify that there (potentially) some access to the destination repository
+# and set up git (with GIT_CMD variable) and GIT_CMD_REPOSITORY
+if [ -n "${SSH_DEPLOY_KEY:=}" ]
 then
-  echo "Destination head branch cannot be 'main' nor 'master'"
-  return -1
-fi
+	echo "[+] Using SSH_DEPLOY_KEY"
 
-if [ -z "$INPUT_PULL_REQUEST_REVIEWERS" ]
+	# Inspired by https://github.com/leigholiver/commit-with-deploy-key/blob/main/entrypoint.sh , thanks!
+	mkdir --parents "$HOME/.ssh"
+	DEPLOY_KEY_FILE="$HOME/.ssh/deploy_key"
+	echo "${SSH_DEPLOY_KEY}" > "$DEPLOY_KEY_FILE"
+	chmod 600 "$DEPLOY_KEY_FILE"
+
+	SSH_KNOWN_HOSTS_FILE="$HOME/.ssh/known_hosts"
+	ssh-keyscan -H github.com > "$SSH_KNOWN_HOSTS_FILE"
+
+	export GIT_SSH_COMMAND="ssh -i "$DEPLOY_KEY_FILE" -o UserKnownHostsFile=$SSH_KNOWN_HOSTS_FILE"
+
+	GIT_CMD_REPOSITORY="git@$GITHUB_SERVER:$DESTINATION_REPO.git"
+
+elif [ -n "${API_TOKEN_GITHUB:=}" ]
 then
-  PULL_REQUEST_REVIEWERS=$INPUT_PULL_REQUEST_REVIEWERS
+	echo "[+] Using API_TOKEN_GITHUB"
+	GIT_CMD_REPOSITORY="https://$DESTINATION_REPOSITORY_USERNAME:$API_TOKEN_GITHUB@$GITHUB_SERVER/$DESTINATION_REPO.git"
 else
-  PULL_REQUEST_REVIEWERS='-r '$INPUT_PULL_REQUEST_REVIEWERS
+	echo "::error::API_TOKEN_GITHUB and SSH_DEPLOY_KEY are empty. Please fill one (recommended the SSH_DEPLOY_KEY)"
+	exit 1
 fi
+
 
 CLONE_DIR=$(mktemp -d)
 
-echo "Setting git variables"
-export GITHUB_TOKEN=$API_TOKEN_GITHUB
-git config --global user.email "$INPUT_USER_EMAIL"
-git config --global user.name "$INPUT_USER_NAME"
+echo "[+] Git version"
+git --version
 
-echo "Cloning destination git repository"
-git clone "https://$API_TOKEN_GITHUB@github.com/$INPUT_DESTINATION_REPO.git" "$CLONE_DIR"
+echo "[+] Cloning destination git repository $DESTINATION_REPO"
+# Setup git
+git config --global user.email "$USER_EMAIL"
+git config --global user.name "$USER_NAME"
 
-echo "Copying contents to git repo"
-mkdir -p $CLONE_DIR/$INPUT_DESTINATION_FOLDER/
-cp $INPUT_SOURCE_FOLDER "$CLONE_DIR/$INPUT_DESTINATION_FOLDER/"
+{
+	git clone --single-branch --branch "$TARGET_BRANCH "$GIT_CMD_REPOSITORY" "$CLONE_DIR"
+} || {
+	echo "::error::Could not clone the destination repository. Command:"
+	echo "::error::git clone --single-branch --branch $TARGET_BRANCH $GIT_CMD_REPOSITORY $CLONE_DIR"
+	echo "::error::(Note that if they exist USER_NAME and API_TOKEN is redacted by GitHub)"
+	echo "::error::Please verify that the target repository exist AND that it contains the destination branch name, and is accesible by the API_TOKEN_GITHUB OR SSH_DEPLOY_KEY"
+	exit 1
+
+}
+ls -la "$CLONE_DIR"
+
+TEMP_DIR=$(mktemp -d)
+# This mv has been the easier way to be able to remove files that were there
+# but not anymore. Otherwise we had to remove the files from "$CLONE_DIR",
+# including "." and with the exception of ".git/"
+mv "$CLONE_DIR/.git" "$TEMP_DIR/.git"
+
+# $TARGET_DIRECTORY is '' by default
+ABSOLUTE_TARGET_DIRECTORY="$CLONE_DIR/$TARGET_DIRECTORY/"
+
+echo "[+] Deleting $ABSOLUTE_TARGET_DIRECTORY"
+rm -rf "$ABSOLUTE_TARGET_DIRECTORY"
+
+echo "[+] Creating (now empty) $ABSOLUTE_TARGET_DIRECTORY"
+mkdir -p "$ABSOLUTE_TARGET_DIRECTORY"
+
+echo "[+] Listing Current Directory Location"
+ls -al
+
+echo "[+] Listing root Location"
+ls -al /
+
+mv "$TEMP_DIR/.git" "$CLONE_DIR/.git"
+
+echo "[+] List contents of $SOURCE_FOLDER"
+ls "$SOURCE_FOLDER"
+
+echo "[+] Checking if local $SOURCE_FOLDER exist"
+if [ ! -d "$SOURCE_FOLDER" ]
+then
+	echo "ERROR: $SOURCE_FOLDER does not exist"
+	echo "This directory needs to exist when push-to-another-repository is executed"
+	echo
+	echo "In the example it is created by ./build.sh: https://github.com/cpina/push-to-another-repository-example/blob/main/.github/workflows/ci.yml#L19"
+	echo
+	echo "If you want to copy a directory that exist in the source repository"
+	echo "to the target repository: you need to clone the source repository"
+	echo "in a previous step in the same build section. For example using"
+	echo "actions/checkout@v2. See: https://github.com/cpina/push-to-another-repository-example/blob/main/.github/workflows/ci.yml#L16"
+	exit 1
+fi
+
+echo "[+] Copying contents of source repository folder $SOURCE_FOLDER to folder $TARGET_DIRECTORY in git repo $DESTINATION_REPO"
+cp -ra "$SOURCE_FOLDER"/. "$CLONE_DIR/$TARGET_DIRECTORY"
 cd "$CLONE_DIR"
-git checkout -b "$INPUT_DESTINATION_HEAD_BRANCH"
 
-echo "Adding git commit"
+echo "[+] Files that will be pushed"
+ls -la
+
+ORIGIN_COMMIT="https://$GITHUB_SERVER/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
+COMMIT_MESSAGE="${COMMIT_MESSAGE/ORIGIN_COMMIT/$ORIGIN_COMMIT}"
+COMMIT_MESSAGE="${COMMIT_MESSAGE/\$GITHUB_REF/$GITHUB_REF}"
+
+echo "[+] Set directory is safe ($CLONE_DIR)"
+# Related to https://github.com/cpina/github-action-push-to-another-repository/issues/64 and https://github.com/cpina/github-action-push-to-another-repository/issues/64
+# TODO: review before releasing it as a version
+git config --global --add safe.directory "$CLONE_DIR"
+
+echo "[+] Adding git commit"
 git add .
 if git status | grep -q "Changes to be committed"
 then
