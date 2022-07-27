@@ -10,9 +10,6 @@ GITHUB_SERVER="${3}"
 DESTINATION_HEAD_BRANCH="${4}"
 USER_EMAIL="${5}"
 USER_NAME="${6}"
-TARGET_BRANCH="${7}"
-COMMIT_MESSAGE="${8}"
-DESTINATION_GITHUB_USERNAME="${10}"
 
 # Verify that there (potentially) some access to the destination repository
 # and set up git (with GIT_CMD variable) and GIT_CMD_REPOSITORY
@@ -53,16 +50,7 @@ echo "[+] Cloning destination git repository $DESTINATION_REPO"
 git config --global user.email "$USER_EMAIL"
 git config --global user.name "$USER_NAME"
 
-{
-	git clone --single-branch --branch "$TARGET_BRANCH "$GIT_CMD_REPOSITORY" "$CLONE_DIR"
-} || {
-	echo "::error::Could not clone the destination repository. Command:"
-	echo "::error::git clone --single-branch --branch $TARGET_BRANCH $GIT_CMD_REPOSITORY $CLONE_DIR"
-	echo "::error::(Note that if they exist USER_NAME and API_TOKEN is redacted by GitHub)"
-	echo "::error::Please verify that the target repository exist AND that it contains the destination branch name, and is accesible by the API_TOKEN_GITHUB OR SSH_DEPLOY_KEY"
-	exit 1
 
-}
 ls -la "$CLONE_DIR"
 
 TEMP_DIR=$(mktemp -d)
@@ -113,8 +101,8 @@ echo "[+] Files that will be pushed"
 ls -la
 
 ORIGIN_COMMIT="https://$GITHUB_SERVER/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
-COMMIT_MESSAGE="${COMMIT_MESSAGE/ORIGIN_COMMIT/$ORIGIN_COMMIT}"
-COMMIT_MESSAGE="${COMMIT_MESSAGE/\$GITHUB_REF/$GITHUB_REF}"
+
+
 
 echo "[+] Set directory is safe ($CLONE_DIR)"
 # Related to https://github.com/cpina/github-action-push-to-another-repository/issues/64 and https://github.com/cpina/github-action-push-to-another-repository/issues/64
