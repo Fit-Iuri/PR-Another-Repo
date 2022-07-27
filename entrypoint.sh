@@ -12,13 +12,7 @@ USER_EMAIL="${5}"
 USER_NAME="${6}"
 TARGET_BRANCH="${7}"
 COMMIT_MESSAGE="${8}"
-TARGET_DIRECTORY="${9}"
 DESTINATION_GITHUB_USERNAME="${10}"
-
-if [ -z "$USER_NAME" ]
-then
-	USER_NAME="$DESTINATION_GITHUB_USERNAME"
-fi
 
 # Verify that there (potentially) some access to the destination repository
 # and set up git (with GIT_CMD variable) and GIT_CMD_REPOSITORY
@@ -77,8 +71,7 @@ TEMP_DIR=$(mktemp -d)
 # including "." and with the exception of ".git/"
 mv "$CLONE_DIR/.git" "$TEMP_DIR/.git"
 
-# $TARGET_DIRECTORY is '' by default
-ABSOLUTE_TARGET_DIRECTORY="$CLONE_DIR/$TARGET_DIRECTORY/"
+
 
 echo "[+] Deleting $ABSOLUTE_TARGET_DIRECTORY"
 rm -rf "$ABSOLUTE_TARGET_DIRECTORY"
