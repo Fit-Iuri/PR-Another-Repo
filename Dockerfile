@@ -1,4 +1,4 @@
-FROM golang:latest
+FROM golang:1.16-alpine3.13
 
 RUN apk update && \
     apk upgrade && \
@@ -10,7 +10,5 @@ RUN apk update && \
     mv ./bin/gh /usr/local/bin/
 
 ADD entrypoint.sh /entrypoint.sh
-
-RUN chmod +x /entrypoint.sh
 
 ENTRYPOINT [ "/entrypoint.sh" ]
