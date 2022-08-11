@@ -9,6 +9,6 @@ RUN apk update && \
     make && \
     mv ./bin/gh /usr/local/bin/
 
-ADD entrypoint.sh /entrypoint.sh
+COPY entrypoint.sh /entrypoint.sh
 
 ENTRYPOINT [ "/entrypoint.sh" ]
